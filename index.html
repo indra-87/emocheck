@@ -270,6 +270,18 @@ function todayStr(){
   return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;
 }
 function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function reportBackendError(context, err){
+  console.error("[감정출석부]", context, err);
+  let el = document.getElementById("globalErrBanner");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "globalErrBanner";
+    el.style.cssText = "position:fixed;left:0;right:0;bottom:0;background:#ffdede;color:#7a1f1f;padding:10px 14px;font-size:13px;z-index:999;border-top:3px solid #e63946;font-family:sans-serif;";
+    document.body.appendChild(el);
+  }
+  const msg = (err && (err.message || err.error_description || err.hint || err.details)) || (typeof err === "string" ? err : JSON.stringify(err));
+  el.textContent = `⚠️ 저장 중 문제가 발생했어요 (${context}): ${msg}`;
+}
 function getDeviceId(){
   let id = localStorage.getItem("eat_device_id_v1");
   if(!id){ id = uid(); localStorage.setItem("eat_device_id_v1", id); }
@@ -583,14 +595,14 @@ function renderTeacherPanel(classId){
     state.pendingTypes = { ...types };
     ensureEntriesSub();
     draw();
-    backend.setSession(classId, newSession);
+    backend.setSession(classId, newSession).catch(e => reportBackendError("출석 체크 시작", e));
   }
 
   function endSession(){
     if(!confirm("오늘의 출석체크를 종료할까요? 학생 화면은 대기 상태로 바뀌어요.")) return;
     state.session = { ...state.session, status:"idle" };
     draw();
-    backend.setSession(classId, state.session);
+    backend.setSession(classId, state.session).catch(e => reportBackendError("출석체크 종료", e));
   }
 
   function startDraw(){
@@ -618,7 +630,7 @@ function renderTeacherPanel(classId){
         state.session = { ...state.session, drawnIds: newDrawn };
         playTada();
         draw();
-        backend.setSession(classId, state.session);
+        backend.setSession(classId, state.session).catch(e => reportBackendError("랜덤 뽑기 기록", e));
       }
     }, 80);
   }
@@ -627,7 +639,7 @@ function renderTeacherPanel(classId){
     if(!confirm("뽑기 기록을 초기화할까요? 모든 학생을 다시 뽑을 수 있게 돼요.")) return;
     state.session = { ...state.session, drawnIds: [] };
     draw();
-    backend.setSession(classId, state.session);
+    backend.setSession(classId, state.session).catch(e => reportBackendError("뽑기 초기화", e));
   }
 
   async function exportAs(kind){
@@ -779,8 +791,8 @@ function renderTeacherPanel(classId){
       state.session = { ...state.session, drawnIds: [] };
       state.selectedEntryId = null;
       draw();
-      backend.clearEntries(classId, state.session.sessionId);
-      backend.setSession(classId, state.session);
+      backend.clearEntries(classId, state.session.sessionId).catch(e => reportBackendError("전체 초기화", e));
+      backend.setSession(classId, state.session).catch(e => reportBackendError("전체 초기화", e));
     });
     $("savePng")?.addEventListener("click", () => exportAs("png"));
     $("savePdf")?.addEventListener("click", () => exportAs("pdf"));
@@ -855,7 +867,7 @@ function renderTeacherPanel(classId){
       state.session = { ...state.session, drawnIds: newDrawn };
       state.selectedEntryId = null;
       draw();
-      backend.setSession(classId, state.session);
+      backend.setSession(classId, state.session).catch(e => reportBackendError("학생 뽑기 제외", e));
     });
     $("deleteStudentBtn")?.addEventListener("click", () => {
       if(!confirm(`${entry.name} 학생의 응답을 삭제할까요? 잘못 표시했을 때 사용하세요.`)) return;
@@ -868,8 +880,8 @@ function renderTeacherPanel(classId){
       if(drawnChanged) state.session = { ...state.session, drawnIds: newDrawn };
       state.selectedEntryId = null;
       draw();
-      backend.deleteEntry(classId, state.session.sessionId, deletedId);
-      if(drawnChanged) backend.setSession(classId, state.session);
+      backend.deleteEntry(classId, state.session.sessionId, deletedId).catch(e => reportBackendError("응답 삭제", e));
+      if(drawnChanged) backend.setSession(classId, state.session).catch(e => reportBackendError("응답 삭제", e));
     });
   }
 
@@ -964,16 +976,18 @@ function renderStudent(classId){
     if(!state.name.trim()){ alert("이름을 먼저 적어주세요!"); return; }
     if(!state.picked){ alert("기분을 하나 골라주세요!"); return; }
     localStorage.setItem("eat_name_"+classId, state.name.trim());
-    backend.setEntry(classId, sid, deviceId, {
+    const entryData = {
       name: state.name.trim(),
       type: state.picked.type,
       value: state.picked.value,
       label: state.picked.label || null,
       bg: state.picked.bg || null,
       ts: Date.now()
-    });
+    };
+    state.entries = { ...state.entries, [deviceId]: entryData };
     playPop();
     draw();
+    backend.setEntry(classId, sid, deviceId, entryData).catch(e => reportBackendError("출석 제출", e));
   }
 
   function pickerHtml(type){
