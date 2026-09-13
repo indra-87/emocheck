@@ -61,7 +61,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap" rel="stylesheet">
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -547,12 +547,13 @@ function renderTeacherPanel(classId){
     showQrOverlay: false,
     fullscreen: false,
     selectedEntryId: null,
+    previewType: null,
     unsubEntries: null,
     currentSessionId: null
   };
 
   const app = $("app");
-  app.innerHTML = `<div id="teacherRoot"></div><div id="overlayRoot"></div><div id="qrOverlayRoot"></div><div id="studentOverlayRoot"></div>`;
+  app.innerHTML = `<div id="teacherRoot"></div><div id="overlayRoot"></div><div id="qrOverlayRoot"></div><div id="studentOverlayRoot"></div><div id="previewOverlayRoot"></div>`;
 
   function entriesArray(){
     return Object.keys(state.entries).map(id => ({id, ...state.entries[id]})).sort((a,b)=>(a.ts||0)-(b.ts||0));
@@ -577,6 +578,7 @@ function renderTeacherPanel(classId){
       return;
     }
     const newSession = { types, status:"active", sessionId: uid(), drawnIds: [] };
+    state.fullscreen = true;
     backend.setSession(classId, newSession);
   }
 
@@ -665,10 +667,17 @@ function renderTeacherPanel(classId){
     const t = state.pendingTypes;
     const locked = state.session.status === "active";
     return `
-      <div class="row">
-        <label class="opt"><input type="checkbox" id="tEmoji" ${t.emoji?"checked":""} ${locked?"disabled":""}> 😊 이모티콘으로 표현하기</label>
-        <label class="opt"><input type="checkbox" id="tColor" ${t.color?"checked":""} ${locked?"disabled":""}> 🎨 색깔로 고르기</label>
-        <label class="opt"><input type="checkbox" id="tWord" ${t.word?"checked":""} ${locked?"disabled":""}> 🗂️ 감정카드(단어)로 고르기</label>
+      <div class="row" style="align-items:stretch;">
+        <label class="opt" style="flex:1 1 220px;"><input type="checkbox" id="tEmoji" ${t.emoji?"checked":""} ${locked?"disabled":""}> 😊 이모티콘으로 표현하기</label>
+        <button type="button" class="btn btn-ghost btn-sm preview-btn" data-preview="emoji">👀 목록보기</button>
+      </div>
+      <div class="row" style="align-items:stretch;margin-top:8px;">
+        <label class="opt" style="flex:1 1 220px;"><input type="checkbox" id="tColor" ${t.color?"checked":""} ${locked?"disabled":""}> 🎨 색깔로 고르기</label>
+        <button type="button" class="btn btn-ghost btn-sm preview-btn" data-preview="color">👀 목록보기</button>
+      </div>
+      <div class="row" style="align-items:stretch;margin-top:8px;">
+        <label class="opt" style="flex:1 1 220px;"><input type="checkbox" id="tWord" ${t.word?"checked":""} ${locked?"disabled":""}> 🗂️ 감정카드(단어)로 고르기</label>
+        <button type="button" class="btn btn-ghost btn-sm preview-btn" data-preview="word">👀 목록보기</button>
       </div>`;
   }
 
@@ -729,6 +738,7 @@ function renderTeacherPanel(classId){
             <button class="btn btn-grape btn-sm" id="drawBtn">🎁 랜덤 뽑기</button>
             <button class="btn btn-ghost btn-sm" id="resetDrawBtn">뽑기 초기화</button>
             <button class="btn btn-coral btn-sm" id="clearAllBtn">🧹 전체 초기화</button>
+            <button class="btn btn-sky btn-sm" id="qrBigBtn2">📱 QR 크게 보기</button>
             <button class="btn btn-sky btn-sm" id="fsBtn">${state.fullscreen ? '↙ 전체화면 닫기' : '🔍 전체화면으로 보기'}</button>
           </div>
         </div>
@@ -766,14 +776,46 @@ function renderTeacherPanel(classId){
     $("prevPage")?.addEventListener("click", () => { state.page--; draw(); });
     $("nextPage")?.addEventListener("click", () => { state.page++; draw(); });
     $("qrBigBtn")?.addEventListener("click", () => { state.showQrOverlay = true; draw(); });
+    $("qrBigBtn2")?.addEventListener("click", () => { state.showQrOverlay = true; draw(); });
     $("fsBtn")?.addEventListener("click", () => { state.fullscreen = !state.fullscreen; draw(); });
     document.querySelectorAll(".entry-card").forEach(elm => elm.addEventListener("click", () => {
       state.selectedEntryId = elm.dataset.id; draw();
+    }));
+    document.querySelectorAll(".preview-btn").forEach(elm => elm.addEventListener("click", () => {
+      state.previewType = elm.dataset.preview; draw();
     }));
 
     drawOverlay();
     drawQrOverlay();
     drawStudentOverlay();
+    drawPreviewOverlay();
+  }
+
+  function drawPreviewOverlay(){
+    const root = $("previewOverlayRoot");
+    if(!state.previewType){ root.innerHTML = ""; return; }
+    const type = state.previewType;
+    const title = type === "emoji" ? "😊 이모티콘 목록" : type === "color" ? "🎨 색깔 목록" : "🗂️ 감정카드 목록";
+    let gridHtml = "";
+    if(type === "emoji"){
+      gridHtml = `<div class="grid-emoji">${EMOJI_LIST.map(o => `<div class="pick-emoji"><span class="e">${o.e}</span><span class="l">${escapeHtml(o.l)}</span></div>`).join("")}</div>`;
+    } else if(type === "color"){
+      gridHtml = `<div class="grid-color">${COLOR_LIST.map(o => `<div class="pick-color"><div class="sw" style="background:${o.c}"></div><div class="l">${escapeHtml(o.l)}</div></div>`).join("")}</div>`;
+    } else {
+      gridHtml = `<div class="grid-word">${WORD_LIST.map(o => `<div class="pick-word" style="background:${o.bg}">${escapeHtml(o.w)}</div>`).join("")}</div>`;
+    }
+    root.innerHTML = `
+      <div class="overlay">
+        <div class="overlay-card" style="max-width:640px;max-height:82vh;overflow-y:auto;text-align:left;">
+          <h2 style="margin-top:0;text-align:center;">${title}</h2>
+          <p style="font-size:13px;color:#6b6480;text-align:center;">학생들이 이 출석부 종류를 고르면 아래 항목 중에서 선택하게 돼요.</p>
+          ${gridHtml}
+          <div style="text-align:center;">
+            <button class="btn btn-ghost btn-sm" id="closePreviewBtn" style="margin-top:16px;">닫기</button>
+          </div>
+        </div>
+      </div>`;
+    $("closePreviewBtn")?.addEventListener("click", () => { state.previewType = null; draw(); });
   }
 
   function drawStudentOverlay(){
