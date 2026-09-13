@@ -966,7 +966,7 @@ function renderTeacherPanel(classId){
 function renderStudent(classId){
   const app = $("app");
   const deviceId = getDeviceId();
-  const state = { session: defaultSession(), entries: {}, activeTab: null, name: localStorage.getItem("eat_name_"+classId) || "", picked: null, unsubEntries:null, currentSessionId:null };
+  const state = { session: defaultSession(), entries: {}, activeTab: null, name: localStorage.getItem("eat_name_"+classId) || "", picked: null, forceEdit: false, unsubEntries:null, currentSessionId:null };
 
   function myEntry(){ return state.entries[deviceId]; }
 
@@ -997,6 +997,7 @@ function renderStudent(classId){
       ts: Date.now()
     };
     state.entries = { ...state.entries, [deviceId]: entryData };
+    state.forceEdit = false;
     playPop();
     draw();
     backend.setEntry(classId, sid, deviceId, entryData).catch(e => reportBackendError("출석 제출", e));
@@ -1025,17 +1026,17 @@ function renderStudent(classId){
     if(type === "emoji"){
       document.querySelectorAll(".pick-emoji").forEach(elm => elm.addEventListener("click", () => {
         state.picked = { type:"emoji", value: elm.dataset.e, label: elm.dataset.l };
-        draw();
+        drawForm();
       }));
     } else if(type === "color"){
       document.querySelectorAll(".pick-color").forEach(elm => elm.addEventListener("click", () => {
         state.picked = { type:"color", value: elm.dataset.c, label: elm.dataset.l };
-        draw();
+        drawForm();
       }));
     } else if(type === "word"){
       document.querySelectorAll(".pick-word").forEach(elm => elm.addEventListener("click", () => {
         state.picked = { type:"word", value: elm.dataset.w, bg: elm.dataset.bg };
-        draw();
+        drawForm();
       }));
     }
   }
@@ -1043,6 +1044,7 @@ function renderStudent(classId){
   function draw(){
     const s = state.session;
     if(s.status !== "active"){
+      state.forceEdit = false;
       app.innerHTML = `
         <div class="top-nav"><h1>${GRADE}학년 ${classId}반</h1></div>
         <div class="card waiting-wrap">
@@ -1053,7 +1055,7 @@ function renderStudent(classId){
     }
 
     const existing = myEntry();
-    if(existing){
+    if(existing && !state.forceEdit){
       app.innerHTML = `
         <div class="top-nav"><h1>${GRADE}학년 ${classId}반</h1></div>
         <div class="card success-wrap">
