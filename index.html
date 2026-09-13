@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  3학년 감정 출석부 (Emotion Attendance Board) — 단일 HTML 파일
+  ============================================================================
+  사용 방법 (선생님용 설정 가이드)
+
+  1) 실시간 동기화는 Supabase(무료 Postgres + Realtime)를 사용합니다.
+     이 파일은 이미 동작하는 SUPABASE_URL / SUPABASE_ANON_KEY 값이 채워져 있어서
+     별도 설정 없이 바로 실시간으로 동작합니다.
+  2) 이 앱이 사용하는 테이블은 다음 SQL로 생성되어 있습니다 (참고/재현용):
+
+       create table public.emo_class_sessions (
+         class_id int primary key,
+         types jsonb not null default '{"emoji":true,"color":true,"word":true}'::jsonb,
+         status text not null default 'idle',
+         session_id text,
+         drawn_ids jsonb not null default '[]'::jsonb,
+         updated_at timestamptz not null default now()
+       );
+
+       create table public.emo_class_entries (
+         class_id int not null,
+         session_id text not null,
+         entry_id text not null,
+         name text not null,
+         type text not null,
+         value text not null,
+         label text,
+         bg text,
+         ts bigint not null,
+         updated_at timestamptz not null default now(),
+         primary key (class_id, session_id, entry_id)
+       );
+
+       -- 로그인 없는 학급용 공개 앱이므로 익명 읽기/쓰기를 허용합니다.
+       alter table public.emo_class_sessions enable row level security;
+       alter table public.emo_class_entries enable row level security;
+       create policy "emo_sessions_select" on public.emo_class_sessions for select using (true);
+       create policy "emo_sessions_insert" on public.emo_class_sessions for insert with check (true);
+       create policy "emo_sessions_update" on public.emo_class_sessions for update using (true) with check (true);
+       create policy "emo_entries_select" on public.emo_class_entries for select using (true);
+       create policy "emo_entries_insert" on public.emo_class_entries for insert with check (true);
+       create policy "emo_entries_update" on public.emo_class_entries for update using (true) with check (true);
+       alter publication supabase_realtime add table public.emo_class_sessions;
+       alter publication supabase_realtime add table public.emo_class_entries;
+
+  3) 다른 Supabase 프로젝트로 바꾸고 싶다면, 위 SQL을 새 프로젝트에 실행한 뒤
+     아래 SUPABASE_URL / SUPABASE_ANON_KEY 값만 새 프로젝트 값으로 바꿔주세요.
+  4) GitHub 배포: 이 파일 하나만 저장소에 올리고 GitHub Pages를 켜면 끝입니다.
+     (Settings > Pages > Branch 선택 후 저장)
+  ============================================================================
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>3학년 감정 출석부</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+  :root{
+    --ink:#2B2440;
+    --bg:#EAF7F0;
+    --card:#FFFFFF;
+    --coral:#FF6F91;
+    --sun:#FFD166;
+    --sky:#4EA8DE;
+    --grape:#7B61FF;
+    --mint:#3DC98F;
+    --line:#2B2440;
+    --shadow-1: 6px 6px 0 rgba(43,36,64,0.14);
+    --shadow-2: 4px 4px 0 rgba(43,36,64,0.14);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 8% 12%, rgba(255,111,145,0.16) 0, transparent 40%),
+      radial-gradient(circle at 92% 18%, rgba(78,168,222,0.16) 0, transparent 40%),
+      radial-gradient(circle at 50% 100%, rgba(255,209,102,0.20) 0, transparent 45%);
+    color:var(--ink);
+    font-family:'Gowun Dodum', sans-serif;
+    min-height:100vh;
+  }
+  h1,h2,h3,.display{ font-family:'Jua', sans-serif; font-weight:400; letter-spacing:.5px; }
+  button, input{ font-family:'Gowun Dodum', sans-serif; }
+  a{ color:inherit; }
+  #app{ max-width:1100px; margin:0 auto; padding:20px 16px 60px; }
+
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    border:3px solid var(--line); border-radius:16px; background:var(--card);
+    padding:12px 20px; font-size:17px; cursor:pointer; box-shadow:var(--shadow-2);
+    transition: transform .08s ease;
+    color:var(--ink); font-family:'Jua',sans-serif;
+  }
+  .btn:active{ transform: translate(2px,2px); box-shadow:1px 1px 0 rgba(43,36,64,0.14); }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn-coral{ background:var(--coral); color:#fff; }
+  .btn-sky{ background:var(--sky); color:#fff; }
+  .btn-mint{ background:var(--mint); color:#fff; }
+  .btn-sun{ background:var(--sun); color:var(--ink); }
+  .btn-grape{ background:var(--grape); color:#fff; }
+  .btn-ghost{ background:transparent; box-shadow:none; border:2px solid var(--line); }
+  .btn-sm{ padding:8px 14px; font-size:14px; border-width:2px; }
+
+  .card{
+    background:var(--card); border:3px solid var(--line); border-radius:22px;
+    box-shadow:var(--shadow-1); padding:22px;
+  }
+  .row{ display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+  .top-nav{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:10px; }
+  .badge{
+    display:inline-block; padding:5px 12px; border-radius:999px; border:2px solid var(--line);
+    font-size:13px; background:#fff;
+  }
+  .badge-ok{ background:var(--mint); color:#fff; border-color:var(--mint); }
+  .badge-warn{ background:var(--sun); border-color:var(--sun); }
+
+  input[type=text], input[type=password]{
+    border:3px solid var(--line); border-radius:14px; padding:14px 16px; font-size:18px;
+    width:100%; background:#fff;
+  }
+  input[type=checkbox]{ width:20px; height:20px; }
+  label.opt{
+    display:flex; align-items:center; gap:10px; border:3px solid var(--line); border-radius:16px;
+    padding:12px 16px; background:#fff; cursor:pointer; font-size:16px;
+  }
+
+  /* --- Home --- */
+  .class-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:18px; margin-top:18px; }
+  .class-card{ text-align:center; }
+  .class-card h3{ font-size:26px; margin:2px 0 10px; }
+  .qr-box{ display:flex; justify-content:center; margin:10px 0; }
+  .qr-box img, .qr-box canvas{ border-radius:12px; border:3px solid var(--line); }
+  .class-card .link-text{ font-size:12px; word-break:break-all; color:#6b6480; margin:6px 0 12px; }
+
+  /* --- Emotion pickers --- */
+  .tabbar{ display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+  .tab{ padding:10px 18px; border-radius:14px; border:3px solid var(--line); background:#fff; cursor:pointer; font-family:'Jua',sans-serif; font-size:15px;}
+  .tab.active{ background:var(--grape); color:#fff; }
+
+  .grid-emoji{ display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:12px; }
+  .pick-emoji{ border:3px solid var(--line); border-radius:16px; background:#fff; padding:12px 6px; cursor:pointer; text-align:center; }
+  .pick-emoji .e{ font-size:34px; display:block; }
+  .pick-emoji .l{ font-size:12px; margin-top:4px; display:block; }
+  .pick-emoji.selected{ background:var(--sun); box-shadow: var(--shadow-2); }
+
+  .grid-color{ display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:12px; }
+  .pick-color{ border:3px solid var(--line); border-radius:16px; cursor:pointer; text-align:center; padding:10px 4px; background:#fff; }
+  .pick-color .sw{ width:100%; height:46px; border-radius:10px; border:2px solid var(--line); margin-bottom:6px; }
+  .pick-color .l{ font-size:12px; }
+  .pick-color.selected{ box-shadow: var(--shadow-2); outline:3px solid var(--grape); outline-offset:2px; }
+
+  .grid-word{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; }
+  .pick-word{ border:3px solid var(--line); border-radius:16px; padding:16px 8px; text-align:center; cursor:pointer; font-size:15px; }
+  .pick-word.selected{ box-shadow: var(--shadow-2); outline:3px solid var(--grape); outline-offset:2px; }
+
+  /* --- Teacher live grid --- */
+  .entry-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; margin-top:14px; }
+  .entry-card{ border:3px solid var(--line); border-radius:16px; padding:10px 6px; text-align:center; background:#fff; cursor:pointer; transition:transform .08s ease; }
+  .entry-card:hover{ transform:translateY(-2px); box-shadow:var(--shadow-2); }
+  .entry-card .rep-emoji{ font-size:32px; }
+  .entry-card .rep-color{ width:44px; height:44px; border-radius:10px; border:2px solid var(--line); margin:0 auto 4px; }
+  .entry-card .rep-word{ font-size:14px; font-family:'Jua',sans-serif; padding:6px 4px; border-radius:8px; }
+  .entry-card .nm{ font-size:13px; margin-top:6px; font-weight:bold; }
+  .entry-card.drawn{ opacity:.4; }
+
+  .card.fs-active{
+    position:fixed; inset:0; z-index:35; border-radius:0; margin:0; max-width:none;
+    overflow-y:auto; box-shadow:none;
+  }
+  .entry-grid.fs{ grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:16px; }
+  .entry-grid.fs .entry-card .rep-emoji{ font-size:46px; }
+  .entry-grid.fs .entry-card .rep-color{ width:64px; height:64px; }
+  .entry-grid.fs .entry-card .rep-word{ font-size:18px; padding:10px 6px; }
+  .entry-grid.fs .entry-card .nm{ font-size:17px; margin-top:10px; }
+
+  .empty-msg{ text-align:center; padding:40px 10px; color:#6b6480; font-size:16px; }
+
+  /* --- draw overlay --- */
+  .overlay{ position:fixed; inset:0; background:rgba(43,36,64,0.82); display:flex; align-items:center; justify-content:center; z-index:50; padding:20px; }
+  .overlay-card{ background:#fff; border-radius:28px; border:4px solid var(--line); padding:40px 30px; text-align:center; max-width:520px; width:100%; box-shadow: 10px 10px 0 rgba(0,0,0,0.25); }
+  .overlay-card .shuffle-name{ font-size:34px; font-family:'Jua',sans-serif; min-height:48px; }
+  .overlay-card .win-name{ font-size:44px; font-family:'Jua',sans-serif; color:var(--coral); animation: pop .5s ease; }
+  .overlay-card .win-rep{ margin:18px 0; font-size:70px; }
+  @keyframes pop{ 0%{ transform:scale(.3); opacity:0; } 60%{ transform:scale(1.15); opacity:1; } 100%{ transform:scale(1); } }
+  .confetti{ position:absolute; font-size:22px; animation: fall 1.6s ease-in forwards; }
+  @keyframes fall{ 0%{ transform: translateY(-40px) rotate(0deg); opacity:1;} 100%{ transform: translateY(420px) rotate(360deg); opacity:0; } }
+
+  .pager{ display:flex; gap:10px; justify-content:center; align-items:center; margin-top:16px; }
+
+  .footer-note{ text-align:center; font-size:12px; color:#8a83a0; margin-top:30px; }
+
+  .waiting-wrap{ text-align:center; padding:50px 10px; }
+  .waiting-wrap .big{ font-size:60px; }
+
+  .success-wrap{ text-align:center; padding:40px 10px; }
+  .success-wrap .big{ font-size:64px; }
+
+  #exportArea{ position:absolute; left:-4000px; top:0; width:820px; background:#fff; padding:26px; }
+  #exportArea h2{ text-align:center; margin-bottom:4px; }
+  #exportArea .sub{ text-align:center; color:#6b6480; margin-bottom:16px; font-size:13px; }
+
+  @media (max-width:520px){
+    .overlay-card .win-name{ font-size:32px; }
+    .overlay-card .win-rep{ font-size:54px; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="exportArea"></div>
+
+<script>
+/* ============================================================
+   0. 설정 (필요 시 이 부분만 수정하세요)
+   ============================================================ */
+const SUPABASE_URL = "https://mnskvubbnenjuiffepdc.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1uc2t2dWJibmVuanVpZmZlcGRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NTc0MzgsImV4cCI6MjEwNDUzMzQzOH0.hqjKREHhSve_Lf-rBHKRe-nhdxP-dU6r5Fg4c7Blh_o";
+const TEACHER_PW = "0800";
+const GRADE = 3;
+const CLASS_COUNT = 6;
+
+/* ============================================================
+   1. 감정 표현 데이터
+   ============================================================ */
+const EMOJI_LIST = [
+  {e:"😄", l:"신나요"}, {e:"😊", l:"행복해요"}, {e:"🙂", l:"편안해요"}, {e:"😌", l:"평온해요"},
+  {e:"🥰", l:"사랑스러워요"}, {e:"🤩", l:"설레요"}, {e:"😐", l:"그저그래요"}, {e:"😴", l:"졸려요"},
+  {e:"🥱", l:"피곤해요"}, {e:"😕", l:"걱정돼요"}, {e:"😟", l:"불안해요"}, {e:"😢", l:"슬퍼요"},
+  {e:"😭", l:"많이슬퍼요"}, {e:"😡", l:"화나요"}, {e:"😠", l:"짜증나요"}, {e:"😱", l:"놀랐어요"},
+  {e:"😨", l:"무서워요"}, {e:"😳", l:"부끄러워요"}, {e:"🤔", l:"궁금해요"}, {e:"😤", l:"답답해요"}
+];
+
+const COLOR_LIST = [
+  {c:"#FF5252", l:"빨강"}, {c:"#FF9800", l:"주황"}, {c:"#FFEB3B", l:"노랑"}, {c:"#AED581", l:"연두"},
+  {c:"#4CAF50", l:"초록"}, {c:"#26A69A", l:"청록"}, {c:"#4FC3F7", l:"하늘"}, {c:"#4285F4", l:"파랑"},
+  {c:"#3F51B5", l:"남색"}, {c:"#9C27B0", l:"보라"}, {c:"#F06292", l:"분홍"}, {c:"#AD1457", l:"자주"},
+  {c:"#8D6E63", l:"갈색"}, {c:"#9E9E9E", l:"회색"}, {c:"#424242", l:"검정"}
+];
+
+const WORD_PASTELS = ["#FFE0E6","#FFF3D6","#E4F6E1","#DFF3FB","#E8E1FA","#FDE7F3","#EFEFEF","#FFEAD6"];
+const WORD_LIST = [
+  "행복해요","신나요","즐거워요","편안해요","자신있어요","설레요","뿌듯해요","궁금해요",
+  "감사해요","사랑스러워요","후련해요","평범해요","심심해요","졸려요","피곤해요","걱정돼요",
+  "긴장돼요","슬퍼요","속상해요","화나요","억울해요","무서워요","놀랐어요","부끄러워요"
+].map((w,i)=>({w, bg: WORD_PASTELS[i % WORD_PASTELS.length]}));
+
+/* ============================================================
+   2. 유틸
+   ============================================================ */
+function qs(name){ return new URLSearchParams(location.search).get(name); }
+function $(id){ return document.getElementById(id); }
+function escapeHtml(s){
+  return String(s==null?"":s).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+}
+function todayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;
+}
+function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function getDeviceId(){
+  let id = localStorage.getItem("eat_device_id_v1");
+  if(!id){ id = uid(); localStorage.setItem("eat_device_id_v1", id); }
+  return id;
+}
+function defaultSession(){
+  return { types:{emoji:true,color:true,word:true}, status:"idle", sessionId:null, drawnIds:[] };
+}
+
+/* ============================================================
+   3. 사운드 (Web Audio API로 직접 생성 — 외부 파일 불필요)
+   ============================================================ */
+let __actx = null;
+function actx(){ if(!__actx){ __actx = new (window.AudioContext||window.webkitAudioContext)(); } return __actx; }
+function beep(freq, dur, type, startTime, gain){
+  try{
+    const ctx = actx();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = type || "sine"; o.frequency.value = freq;
+    g.gain.value = gain==null?0.2:gain;
+    o.connect(g); g.connect(ctx.destination);
+    const t0 = ctx.currentTime + (startTime||0);
+    o.start(t0); 
+    g.gain.setValueAtTime(g.gain.value, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+    o.stop(t0+dur+0.02);
+  }catch(e){ /* audio not available */ }
+}
+function playDrumroll(){
+  for(let i=0;i<16;i++){ beep(140+Math.random()*60, 0.06, "square", i*0.075, 0.14); }
+}
+function playTada(){
+  [523.25,659.25,783.99,1046.5].forEach((f,i)=> beep(f,0.28,"triangle", i*0.11, 0.22));
+}
+function playPop(){ beep(660,0.12,"sine",0,0.18); beep(880,0.12,"sine",0.08,0.16); }
+
+/* ============================================================
+   4. 백엔드 (Supabase 또는 로컬 저장소 자동 선택)
+   ============================================================ */
+let backend = null;
+let backendMode = "local";
+
+function initBackend(){
+  const hasConfig = SUPABASE_URL && !SUPABASE_URL.includes("YOUR_PROJECT") && SUPABASE_ANON_KEY && SUPABASE_ANON_KEY !== "YOUR_ANON_KEY";
+  if(hasConfig && window.supabase && window.supabase.createClient){
+    try{
+      const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      backendMode = "supabase";
+
+      const rowToSession = row => !row ? defaultSession() : {
+        types: row.types || defaultSession().types,
+        status: row.status || "idle",
+        sessionId: row.session_id || null,
+        drawnIds: row.drawn_ids || []
+      };
+      const rowsToEntries = rows => {
+        const obj = {};
+        (rows||[]).forEach(r => { obj[r.entry_id] = { name:r.name, type:r.type, value:r.value, label:r.label||null, bg:r.bg||null, ts:r.ts }; });
+        return obj;
+      };
+
+      backend = {
+        subscribeSession(classId, cb){
+          const cid = Number(classId);
+          const load = () => sb.from("emo_class_sessions").select("*").eq("class_id", cid).maybeSingle()
+            .then(({data, error}) => { if(error) console.error(error); cb(rowToSession(data)); });
+          load();
+          const channel = sb.channel("emo-session-"+cid)
+            .on("postgres_changes", { event:"*", schema:"public", table:"emo_class_sessions", filter:`class_id=eq.${cid}` }, () => load())
+            .subscribe();
+          return () => sb.removeChannel(channel);
+        },
+        setSession(classId, data){
+          return sb.from("emo_class_sessions").upsert({
+            class_id: Number(classId),
+            types: data.types,
+            status: data.status,
+            session_id: data.sessionId,
+            drawn_ids: data.drawnIds,
+            updated_at: new Date().toISOString()
+          }, { onConflict: "class_id" });
+        },
+        subscribeEntries(classId, sessionId, cb){
+          if(!sessionId){ cb({}); return ()=>{}; }
+          const cid = Number(classId);
+          const load = () => sb.from("emo_class_entries").select("*").eq("class_id", cid).eq("session_id", sessionId)
+            .then(({data, error}) => { if(error) console.error(error); cb(rowsToEntries(data)); });
+          load();
+          const channel = sb.channel("emo-entries-"+sessionId)
+            .on("postgres_changes", { event:"*", schema:"public", table:"emo_class_entries", filter:`session_id=eq.${sessionId}` }, () => load())
+            .subscribe();
+          return () => sb.removeChannel(channel);
+        },
+        setEntry(classId, sessionId, entryId, data){
+          return sb.from("emo_class_entries").upsert({
+            class_id: Number(classId),
+            session_id: sessionId,
+            entry_id: entryId,
+            name: data.name,
+            type: data.type,
+            value: data.value,
+            label: data.label || null,
+            bg: data.bg || null,
+            ts: data.ts,
+            updated_at: new Date().toISOString()
+          }, { onConflict: "class_id,session_id,entry_id" });
+        },
+        deleteEntry(classId, sessionId, entryId){
+          return sb.from("emo_class_entries").delete()
+            .eq("class_id", Number(classId)).eq("session_id", sessionId).eq("entry_id", entryId);
+        },
+        clearEntries(classId, sessionId){
+          if(!sessionId) return Promise.resolve();
+          return sb.from("emo_class_entries").delete()
+            .eq("class_id", Number(classId)).eq("session_id", sessionId);
+        }
+      };
+      return;
+    }catch(e){ console.error("Supabase init failed, falling back to local mode", e); }
+  }
+  backendMode = "local";
+  backend = {
+    subscribeSession(classId, cb){
+      const read = () => { try{ return JSON.parse(localStorage.getItem(`eat_session_${classId}`)) || defaultSession(); }catch(e){ return defaultSession(); } };
+      cb(read());
+      const handler = () => cb(read());
+      window.addEventListener("storage", handler);
+      window.addEventListener("eat-local-update", handler);
+      const timer = setInterval(handler, 1200);
+      return () => { window.removeEventListener("storage",handler); window.removeEventListener("eat-local-update",handler); clearInterval(timer); };
+    },
+    setSession(classId, data){
+      localStorage.setItem(`eat_session_${classId}`, JSON.stringify(data));
+      window.dispatchEvent(new Event("eat-local-update"));
+      return Promise.resolve();
+    },
+    subscribeEntries(classId, sessionId, cb){
+      if(!sessionId){ cb({}); return ()=>{}; }
+      const key = `eat_entries_${classId}_${sessionId}`;
+      const read = () => { try{ return JSON.parse(localStorage.getItem(key)) || {}; }catch(e){ return {}; } };
+      cb(read());
+      const handler = () => cb(read());
+      window.addEventListener("storage", handler);
+      window.addEventListener("eat-local-update", handler);
+      const timer = setInterval(handler, 1200);
+      return () => { window.removeEventListener("storage",handler); window.removeEventListener("eat-local-update",handler); clearInterval(timer); };
+    },
+    setEntry(classId, sessionId, entryId, data){
+      const key = `eat_entries_${classId}_${sessionId}`;
+      let all = {}; try{ all = JSON.parse(localStorage.getItem(key)) || {}; }catch(e){}
+      all[entryId] = data;
+      localStorage.setItem(key, JSON.stringify(all));
+      window.dispatchEvent(new Event("eat-local-update"));
+      return Promise.resolve();
+    },
+    deleteEntry(classId, sessionId, entryId){
+      const key = `eat_entries_${classId}_${sessionId}`;
+      let all = {}; try{ all = JSON.parse(localStorage.getItem(key)) || {}; }catch(e){}
+      delete all[entryId];
+      localStorage.setItem(key, JSON.stringify(all));
+      window.dispatchEvent(new Event("eat-local-update"));
+      return Promise.resolve();
+    },
+    clearEntries(classId, sessionId){
+      if(!sessionId) return Promise.resolve();
+      localStorage.setItem(`eat_entries_${classId}_${sessionId}`, JSON.stringify({}));
+      window.dispatchEvent(new Event("eat-local-update"));
+      return Promise.resolve();
+    }
+  };
+}
+
+/* ============================================================
+   5. 표현 렌더링 헬퍼
+   ============================================================ */
+function repHtml(entry, big){
+  if(entry.type === "emoji"){
+    return `<div class="${big?'':'rep-emoji'}" style="font-size:${big?'70px':'32px'}">${entry.value}</div>`;
+  }
+  if(entry.type === "color"){
+    const size = big ? "90px" : "44px";
+    return `<div class="rep-color" style="width:${size};height:${size};background:${entry.value};margin:0 auto 4px;"></div>`
+         + (entry.label ? `<div style="font-size:${big?'18px':'12px'};font-weight:bold;">${escapeHtml(entry.label)}</div>` : "");
+  }
+  return `<div class="rep-word" style="background:${entry.bg||'#eee'};font-size:${big?'26px':'14px'}">${escapeHtml(entry.value)}</div>`;
+}
+
+/* ============================================================
+   6. 라우팅
+   ============================================================ */
+window.addEventListener("load", () => {
+  initBackend();
+  const classId = qs("class");
+  const teacherMode = qs("teacher") === "1";
+  if(!classId){ renderHome(); }
+  else if(teacherMode){ renderTeacherEntry(classId); }
+  else { renderStudent(classId); }
+});
+
+/* ---------------- 홈 화면 ---------------- */
+function renderHome(){
+  const app = $("app");
+  let cardsHtml = "";
+  for(let i=1;i<=CLASS_COUNT;i++){
+    cardsHtml += `
+      <div class="class-card card">
+        <h3>${GRADE}학년 ${i}반</h3>
+        <div class="qr-box" id="qr-${i}"></div>
+        <div class="link-text" id="link-${i}"></div>
+        <div class="row" style="justify-content:center;">
+          <a class="btn btn-sky btn-sm" href="?class=${i}">학생 화면 열기</a>
+          <a class="btn btn-grape btn-sm" href="?class=${i}&teacher=1">선생님 화면</a>
+        </div>
+      </div>`;
+  }
+  app.innerHTML = `
+    <div class="top-nav">
+      <h1>🌈 ${GRADE}학년 감정 출석부</h1>
+      <span class="badge ${backendMode==='supabase'?'badge-ok':'badge-warn'}">
+        ${backendMode==='supabase' ? '✅ 실시간 연결됨 (Supabase)' : '⚠️ 로컬 테스트 모드 (같은 브라우저 탭끼리만 동기화)'}
+      </span>
+    </div>
+    <p style="font-size:16px;">반을 선택해서 QR코드를 화면에 띄워주세요. 학생들이 각자 기기로 QR을 스캔하면 바로 출석 화면으로 이동해요.</p>
+    <div class="class-grid">${cardsHtml}</div>
+    <div class="footer-note">
+      ${backendMode==='supabase' ? '' : '여러 학생의 기기에서 실시간으로 보이게 하려면 이 파일 상단의 SUPABASE_URL / SUPABASE_ANON_KEY를 설정해주세요.'}
+    </div>
+  `;
+  for(let i=1;i<=CLASS_COUNT;i++){
+    const link = location.origin + location.pathname + "?class=" + i;
+    $("link-"+i).textContent = link;
+    new QRCode($("qr-"+i), { text: link, width: 140, height: 140, correctLevel: QRCode.CorrectLevel.M });
+  }
+}
+
+/* ---------------- 선생님 진입 (비밀번호) ---------------- */
+function renderTeacherEntry(classId){
+  const authed = sessionStorage.getItem("eat_teacher_"+classId) === "1";
+  if(authed){ renderTeacherPanel(classId); return; }
+  const app = $("app");
+  app.innerHTML = `
+    <div class="top-nav">
+      <h1>🔐 ${GRADE}학년 ${classId}반 선생님 화면</h1>
+      <a class="btn btn-ghost btn-sm" href="?">홈으로</a>
+    </div>
+    <div class="card" style="max-width:380px;margin:40px auto;text-align:center;">
+      <p style="font-size:18px;">선생님 비밀번호를 입력해주세요</p>
+      <input type="password" id="pwInput" inputmode="numeric" maxlength="8" placeholder="••••" style="text-align:center;letter-spacing:8px;font-size:24px;">
+      <p id="pwErr" style="color:#e63946;font-size:14px;min-height:18px;"></p>
+      <button class="btn btn-grape" style="width:100%;" id="pwBtn">입장하기</button>
+    </div>
+  `;
+  const submit = () => {
+    if($("pwInput").value === TEACHER_PW){
+      sessionStorage.setItem("eat_teacher_"+classId, "1");
+      renderTeacherPanel(classId);
+    } else {
+      $("pwErr").textContent = "비밀번호가 올바르지 않아요.";
+    }
+  };
+  $("pwBtn").addEventListener("click", submit);
+  $("pwInput").addEventListener("keydown", e => { if(e.key==="Enter") submit(); });
+  $("pwInput").focus();
+}
+
+/* ---------------- 선생님 패널 ---------------- */
+function renderTeacherPanel(classId){
+  const state = {
+    session: defaultSession(),
+    entries: {},
+    page: 1,
+    pendingTypes: {emoji:true, color:true, word:true},
+    drawOverlay: null,      // null | 'shuffling' | 'result'
+    drawWinner: null,
+    showQrOverlay: false,
+    fullscreen: false,
+    selectedEntryId: null,
+    unsubEntries: null,
+    currentSessionId: null
+  };
+
+  const app = $("app");
+  app.innerHTML = `<div id="teacherRoot"></div><div id="overlayRoot"></div><div id="qrOverlayRoot"></div><div id="studentOverlayRoot"></div>`;
+
+  function entriesArray(){
+    return Object.keys(state.entries).map(id => ({id, ...state.entries[id]})).sort((a,b)=>(a.ts||0)-(b.ts||0));
+  }
+
+  function ensureEntriesSub(){
+    const sid = state.session.sessionId;
+    if(sid === state.currentSessionId) return;
+    state.currentSessionId = sid;
+    if(state.unsubEntries) state.unsubEntries();
+    state.page = 1;
+    state.unsubEntries = backend.subscribeEntries(classId, sid, entries => {
+      state.entries = entries || {};
+      draw();
+    });
+  }
+
+  function startSession(){
+    const types = state.pendingTypes;
+    if(!types.emoji && !types.color && !types.word){
+      alert("최소 한 가지 이상의 출석부 종류를 선택해주세요!");
+      return;
+    }
+    const newSession = { types, status:"active", sessionId: uid(), drawnIds: [] };
+    backend.setSession(classId, newSession);
+  }
+
+  function endSession(){
+    if(!confirm("오늘의 출석체크를 종료할까요? 학생 화면은 대기 상태로 바뀌어요.")) return;
+    backend.setSession(classId, { ...state.session, status:"idle" });
+  }
+
+  function startDraw(){
+    const candidates = entriesArray().filter(e => !(state.session.drawnIds||[]).includes(e.id));
+    if(candidates.length === 0){
+      alert(entriesArray().length===0 ? "아직 출석한 학생이 없어요!" : "모든 학생이 이미 뽑혔어요! 뽑기 기록을 초기화해보세요.");
+      return;
+    }
+    state.drawOverlay = "shuffling";
+    state.drawWinner = null;
+    draw();
+    playDrumroll();
+    let elapsed = 0;
+    const iv = setInterval(() => {
+      const c = candidates[Math.floor(Math.random()*candidates.length)];
+      const el = document.getElementById("shuffleName");
+      if(el) el.textContent = c.name;
+      elapsed += 80;
+      if(elapsed > 1400){
+        clearInterval(iv);
+        const winner = candidates[Math.floor(Math.random()*candidates.length)];
+        state.drawOverlay = "result";
+        state.drawWinner = winner;
+        const newDrawn = [...(state.session.drawnIds||[]), winner.id];
+        backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
+        playTada();
+        draw();
+      }
+    }, 80);
+  }
+
+  function resetDraw(){
+    if(!confirm("뽑기 기록을 초기화할까요? 모든 학생을 다시 뽑을 수 있게 돼요.")) return;
+    backend.setSession(classId, { ...state.session, drawnIds: [] });
+  }
+
+  async function exportAs(kind){
+    const list = entriesArray();
+    if(list.length === 0){ alert("저장할 출석 기록이 없어요."); return; }
+    const cardsHtml = list.map(e => `
+      <div style="border:2px solid #2B2440;border-radius:12px;padding:10px;text-align:center;">
+        ${repHtml(e,false)}
+        <div style="font-size:13px;font-weight:bold;margin-top:6px;">${escapeHtml(e.name)}</div>
+      </div>`).join("");
+    $("exportArea").innerHTML = `
+      <h2 style="font-family:'Jua',sans-serif;">${GRADE}학년 ${classId}반 오늘의 감정 출석부</h2>
+      <div class="sub">${todayStr()} · 총 ${list.length}명</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">${cardsHtml}</div>
+    `;
+    await new Promise(r => setTimeout(r, 50));
+    const canvas = await html2canvas($("exportArea"), { backgroundColor:"#ffffff", scale:2 });
+    if(kind === "png"){
+      const a = document.createElement("a");
+      a.download = `${GRADE}학년${classId}반_감정출석부_${todayStr()}.png`;
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+    } else {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF("p","pt","a4");
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW - 40;
+      const imgH = canvas.height * imgW / canvas.width;
+      const imgData = canvas.toDataURL("image/png");
+      let heightLeft = imgH, position = 20;
+      pdf.addImage(imgData, "PNG", 20, position, imgW, imgH);
+      heightLeft -= (pageH - 40);
+      while(heightLeft > 0){
+        position = -(imgH - heightLeft) + 20;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 20, position, imgW, imgH);
+        heightLeft -= (pageH - 40);
+      }
+      pdf.save(`${GRADE}학년${classId}반_감정출석부_${todayStr()}.pdf`);
+    }
+    $("exportArea").innerHTML = "";
+  }
+
+  function typeCheckboxesHtml(){
+    const t = state.pendingTypes;
+    const locked = state.session.status === "active";
+    return `
+      <div class="row">
+        <label class="opt"><input type="checkbox" id="tEmoji" ${t.emoji?"checked":""} ${locked?"disabled":""}> 😊 이모티콘으로 표현하기</label>
+        <label class="opt"><input type="checkbox" id="tColor" ${t.color?"checked":""} ${locked?"disabled":""}> 🎨 색깔로 고르기</label>
+        <label class="opt"><input type="checkbox" id="tWord" ${t.word?"checked":""} ${locked?"disabled":""}> 🗂️ 감정카드(단어)로 고르기</label>
+      </div>`;
+  }
+
+  function paginatedEntries(){
+    const arr = entriesArray().reverse();
+    const perPage = 25;
+    const totalPages = Math.max(1, Math.ceil(arr.length / perPage));
+    if(state.page > totalPages) state.page = totalPages;
+    const start = (state.page-1)*perPage;
+    return { list: arr.slice(start, start+perPage), totalPages, total: arr.length };
+  }
+
+  function draw(){
+    const s = state.session;
+    const root = $("teacherRoot");
+    const { list, totalPages, total } = paginatedEntries();
+    const drawnIds = s.drawnIds || [];
+
+    const gridHtml = total === 0
+      ? `<div class="empty-msg">아직 출석한 학생이 없어요. 학생들이 QR로 접속해서 기분을 표시하면 여기에 실시간으로 나타나요! 👀</div>`
+      : `<div class="entry-grid ${state.fullscreen?'fs':''}">${list.map(e => `
+          <div class="entry-card ${drawnIds.includes(e.id)?'drawn':''}" data-id="${e.id}">
+            ${repHtml(e,false)}
+            <div class="nm">${escapeHtml(e.name)}</div>
+          </div>`).join("")}</div>
+         <div class="pager">
+           <button class="btn btn-ghost btn-sm" id="prevPage" ${state.page<=1?"disabled":""}>◀ 이전</button>
+           <span>${state.page} / ${totalPages} 페이지 (총 ${total}명)</span>
+           <button class="btn btn-ghost btn-sm" id="nextPage" ${state.page>=totalPages?"disabled":""}>다음 ▶</button>
+         </div>`;
+
+    root.innerHTML = `
+      <div class="top-nav">
+        <h1>🧑‍🏫 ${GRADE}학년 ${classId}반</h1>
+        <div class="row">
+          <span class="badge ${backendMode==='supabase'?'badge-ok':'badge-warn'}">${backendMode==='supabase'?'실시간 연결됨':'로컬 테스트 모드'}</span>
+          <button class="btn btn-sky btn-sm" id="qrBigBtn">📱 QR 크게 보기</button>
+          <a class="btn btn-ghost btn-sm" href="?">홈으로</a>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px;">
+        <h3 style="margin-top:0;">출석부 종류 선택</h3>
+        ${typeCheckboxesHtml()}
+        <div class="row" style="margin-top:16px;">
+          ${s.status === "active"
+            ? `<button class="btn btn-coral" id="endBtn">⏹ 출석체크 종료</button>
+               <button class="btn btn-sky" id="restartBtn">🔁 새 출석체크 다시 시작</button>`
+            : `<button class="btn btn-mint" id="startBtn">▶ 출석 체크 시작</button>`}
+        </div>
+        ${s.status === "active" ? `<p style="font-size:13px;color:#6b6480;margin-bottom:0;">진행 중에는 종류를 바꿀 수 없어요. 바꾸려면 '새 출석체크 다시 시작'을 눌러주세요.</p>` : ""}
+      </div>
+
+      <div class="card ${state.fullscreen?'fs-active':''}" id="liveCard" style="margin-bottom:18px;">
+        <div class="row" style="justify-content:space-between;">
+          <h3 style="margin:0;">실시간 감정 출석 현황</h3>
+          <div class="row">
+            <button class="btn btn-grape btn-sm" id="drawBtn">🎁 랜덤 뽑기</button>
+            <button class="btn btn-ghost btn-sm" id="resetDrawBtn">뽑기 초기화</button>
+            <button class="btn btn-coral btn-sm" id="clearAllBtn">🧹 전체 초기화</button>
+            <button class="btn btn-sky btn-sm" id="fsBtn">${state.fullscreen ? '↙ 전체화면 닫기' : '🔍 전체화면으로 보기'}</button>
+          </div>
+        </div>
+        ${gridHtml}
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">오늘의 감정 출석부 저장하기</h3>
+        <div class="row">
+          <button class="btn btn-sun" id="savePng">🖼 이미지로 저장</button>
+          <button class="btn btn-sun" id="savePdf">📄 PDF로 저장</button>
+        </div>
+      </div>
+    `;
+
+    // events
+    $("tEmoji")?.addEventListener("change", e => state.pendingTypes.emoji = e.target.checked);
+    $("tColor")?.addEventListener("change", e => state.pendingTypes.color = e.target.checked);
+    $("tWord")?.addEventListener("change", e => state.pendingTypes.word = e.target.checked);
+    $("startBtn")?.addEventListener("click", startSession);
+    $("restartBtn")?.addEventListener("click", () => { if(confirm("새로운 출석체크를 시작할까요? 이전 기록은 화면에서 사라져요.")) startSession(); });
+    $("endBtn")?.addEventListener("click", endSession);
+    $("drawBtn")?.addEventListener("click", startDraw);
+    $("resetDrawBtn")?.addEventListener("click", resetDraw);
+    $("clearAllBtn")?.addEventListener("click", () => {
+      if(total === 0){ alert("지울 출석 기록이 없어요."); return; }
+      if(!confirm("정말 전체 초기화할까요? 지금 반의 모든 학생 응답이 사라져요. (학생들이 다시 표시해야 해요)")) return;
+      backend.clearEntries(classId, state.session.sessionId);
+      backend.setSession(classId, { ...state.session, drawnIds: [] });
+      state.selectedEntryId = null;
+      draw();
+    });
+    $("savePng")?.addEventListener("click", () => exportAs("png"));
+    $("savePdf")?.addEventListener("click", () => exportAs("pdf"));
+    $("prevPage")?.addEventListener("click", () => { state.page--; draw(); });
+    $("nextPage")?.addEventListener("click", () => { state.page++; draw(); });
+    $("qrBigBtn")?.addEventListener("click", () => { state.showQrOverlay = true; draw(); });
+    $("fsBtn")?.addEventListener("click", () => { state.fullscreen = !state.fullscreen; draw(); });
+    document.querySelectorAll(".entry-card").forEach(elm => elm.addEventListener("click", () => {
+      state.selectedEntryId = elm.dataset.id; draw();
+    }));
+
+    drawOverlay();
+    drawQrOverlay();
+    drawStudentOverlay();
+  }
+
+  function drawStudentOverlay(){
+    const root = $("studentOverlayRoot");
+    const entry = state.selectedEntryId ? state.entries[state.selectedEntryId] : null;
+    if(!entry){ root.innerHTML = ""; return; }
+    const isExcluded = (state.session.drawnIds || []).includes(state.selectedEntryId);
+    root.innerHTML = `
+      <div class="overlay">
+        <div class="overlay-card">
+          <p style="font-size:15px;color:#6b6480;">선택한 학생의 응답이에요</p>
+          <div class="win-name">${escapeHtml(entry.name)}</div>
+          <div class="win-rep">${repHtml(entry, true)}</div>
+          <p style="font-size:15px;">이 응답을 고른 이유를 물어봐주세요! 🎤</p>
+          ${isExcluded ? `<p style="font-size:13px;color:#8a83a0;">이미 랜덤 뽑기에서 제외된 학생이에요.</p>` : ""}
+          <div class="row" style="justify-content:center;margin-top:10px;">
+            <button class="btn btn-ghost btn-sm" id="closeStudentBtn">닫기</button>
+            ${isExcluded ? "" : `<button class="btn btn-coral btn-sm" id="excludeStudentBtn">이 학생을 랜덤뽑기에서 제외하기</button>`}
+            <button class="btn btn-sun btn-sm" id="deleteStudentBtn">🗑 이 응답 삭제</button>
+          </div>
+        </div>
+      </div>`;
+    $("closeStudentBtn")?.addEventListener("click", () => { state.selectedEntryId = null; draw(); });
+    $("excludeStudentBtn")?.addEventListener("click", () => {
+      const newDrawn = [...(state.session.drawnIds || []), state.selectedEntryId];
+      backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
+      state.selectedEntryId = null;
+      draw();
+    });
+    $("deleteStudentBtn")?.addEventListener("click", () => {
+      if(!confirm(`${entry.name} 학생의 응답을 삭제할까요? 잘못 표시했을 때 사용하세요.`)) return;
+      backend.deleteEntry(classId, state.session.sessionId, state.selectedEntryId);
+      const newDrawn = (state.session.drawnIds || []).filter(id => id !== state.selectedEntryId);
+      if(newDrawn.length !== (state.session.drawnIds || []).length){
+        backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
+      }
+      state.selectedEntryId = null;
+      draw();
+    });
+  }
+
+  function drawQrOverlay(){
+    const root = $("qrOverlayRoot");
+    if(!state.showQrOverlay){ root.innerHTML = ""; return; }
+    const link = location.origin + location.pathname + "?class=" + classId;
+    root.innerHTML = `
+      <div class="overlay">
+        <div class="overlay-card" style="max-width:440px;">
+          <h2 style="margin-top:0;">${GRADE}학년 ${classId}반 입장 QR</h2>
+          <p style="font-size:15px;color:#6b6480;">학생들에게 이 화면을 크게 보여주고 QR을 스캔하도록 안내해주세요.</p>
+          <div class="qr-box" id="bigQr" style="justify-content:center;"></div>
+          <p style="font-size:12px;color:#8a83a0;word-break:break-all;">${escapeHtml(link)}</p>
+          <button class="btn btn-ghost btn-sm" id="closeQrBtn">닫기</button>
+        </div>
+      </div>`;
+    $("bigQr").innerHTML = "";
+    new QRCode($("bigQr"), { text: link, width: 260, height: 260, correctLevel: QRCode.CorrectLevel.M });
+    $("closeQrBtn")?.addEventListener("click", () => { state.showQrOverlay = false; draw(); });
+  }
+
+  function drawOverlay(){
+    const root = $("overlayRoot");
+    if(!state.drawOverlay){ root.innerHTML = ""; return; }
+    if(state.drawOverlay === "shuffling"){
+      root.innerHTML = `
+        <div class="overlay">
+          <div class="overlay-card">
+            <div style="font-size:50px;">🎲</div>
+            <p style="font-size:16px;color:#6b6480;">두근두근... 누가 뽑힐까요?</p>
+            <div class="shuffle-name" id="shuffleName">...</div>
+          </div>
+        </div>`;
+      return;
+    }
+    const w = state.drawWinner;
+    const confetti = ["🎉","✨","🎊","⭐","💫"].map((c,i) => `<span class="confetti" style="left:${10+i*18}%;animation-delay:${i*0.08}s;">${c}</span>`).join("");
+    root.innerHTML = `
+      <div class="overlay">
+        <div class="overlay-card" style="position:relative;overflow:hidden;">
+          ${confetti}
+          <p style="font-size:16px;color:#6b6480;">오늘의 발표 친구는 바로...</p>
+          <div class="win-name">${escapeHtml(w.name)}</div>
+          <div class="win-rep">${repHtml(w, true)}</div>
+          <p style="font-size:15px;">왜 이렇게 표시했는지 친구들에게 이야기해볼까요? 🎤</p>
+          <div class="row" style="justify-content:center;margin-top:10px;">
+            <button class="btn btn-grape btn-sm" id="drawAgainBtn">다음 뽑기</button>
+            <button class="btn btn-ghost btn-sm" id="closeDrawBtn">닫기</button>
+          </div>
+        </div>
+      </div>`;
+    $("drawAgainBtn")?.addEventListener("click", startDraw);
+    $("closeDrawBtn")?.addEventListener("click", () => { state.drawOverlay = null; draw(); });
+  }
+
+  document.addEventListener("keydown", e => {
+    if(e.key === "Escape" && state.fullscreen){ state.fullscreen = false; draw(); }
+  });
+
+  backend.subscribeSession(classId, session => {
+    state.session = session || defaultSession();
+    state.pendingTypes = { ...state.session.types };
+    ensureEntriesSub();
+    draw();
+  });
+}
+
+/* ---------------- 학생 화면 ---------------- */
+function renderStudent(classId){
+  const app = $("app");
+  const deviceId = getDeviceId();
+  const state = { session: defaultSession(), entries: {}, activeTab: null, name: localStorage.getItem("eat_name_"+classId) || "", picked: null, unsubEntries:null, currentSessionId:null };
+
+  function myEntry(){ return state.entries[deviceId]; }
+
+  function ensureEntriesSub(){
+    const sid = state.session.sessionId;
+    if(sid === state.currentSessionId) return;
+    state.currentSessionId = sid;
+    if(state.unsubEntries) state.unsubEntries();
+    state.unsubEntries = backend.subscribeEntries(classId, sid, entries => { state.entries = entries || {}; draw(); });
+  }
+
+  function availableTypes(){
+    const t = state.session.types || {};
+    return ["emoji","color","word"].filter(k => t[k]);
+  }
+
+  function submit(){
+    const sid = state.session.sessionId;
+    if(!state.name.trim()){ alert("이름을 먼저 적어주세요!"); return; }
+    if(!state.picked){ alert("기분을 하나 골라주세요!"); return; }
+    localStorage.setItem("eat_name_"+classId, state.name.trim());
+    backend.setEntry(classId, sid, deviceId, {
+      name: state.name.trim(),
+      type: state.picked.type,
+      value: state.picked.value,
+      label: state.picked.label || null,
+      bg: state.picked.bg || null,
+      ts: Date.now()
+    });
+    playPop();
+    draw();
+  }
+
+  function pickerHtml(type){
+    if(type === "emoji"){
+      return `<div class="grid-emoji">${EMOJI_LIST.map(o => `
+        <div class="pick-emoji ${state.picked && state.picked.value===o.e ? 'selected':''}" data-e="${o.e}" data-l="${escapeHtml(o.l)}">
+          <span class="e">${o.e}</span><span class="l">${escapeHtml(o.l)}</span>
+        </div>`).join("")}</div>`;
+    }
+    if(type === "color"){
+      return `<div class="grid-color">${COLOR_LIST.map(o => `
+        <div class="pick-color ${state.picked && state.picked.value===o.c ? 'selected':''}" data-c="${o.c}" data-l="${escapeHtml(o.l)}">
+          <div class="sw" style="background:${o.c}"></div><div class="l">${escapeHtml(o.l)}</div>
+        </div>`).join("")}</div>`;
+    }
+    return `<div class="grid-word">${WORD_LIST.map(o => `
+      <div class="pick-word ${state.picked && state.picked.value===o.w ? 'selected':''}" style="background:${o.bg}" data-w="${escapeHtml(o.w)}" data-bg="${o.bg}">
+        ${escapeHtml(o.w)}
+      </div>`).join("")}</div>`;
+  }
+
+  function bindPicker(type){
+    if(type === "emoji"){
+      document.querySelectorAll(".pick-emoji").forEach(elm => elm.addEventListener("click", () => {
+        state.picked = { type:"emoji", value: elm.dataset.e, label: elm.dataset.l };
+        draw();
+      }));
+    } else if(type === "color"){
+      document.querySelectorAll(".pick-color").forEach(elm => elm.addEventListener("click", () => {
+        state.picked = { type:"color", value: elm.dataset.c, label: elm.dataset.l };
+        draw();
+      }));
+    } else if(type === "word"){
+      document.querySelectorAll(".pick-word").forEach(elm => elm.addEventListener("click", () => {
+        state.picked = { type:"word", value: elm.dataset.w, bg: elm.dataset.bg };
+        draw();
+      }));
+    }
+  }
+
+  function draw(){
+    const s = state.session;
+    if(s.status !== "active"){
+      app.innerHTML = `
+        <div class="top-nav"><h1>${GRADE}학년 ${classId}반</h1></div>
+        <div class="card waiting-wrap">
+          <div class="big">⏳</div>
+          <p style="font-size:18px;">아직 출석체크가 시작되지 않았어요.<br>선생님을 기다려주세요!</p>
+        </div>`;
+      return;
+    }
+
+    const existing = myEntry();
+    if(existing){
+      app.innerHTML = `
+        <div class="top-nav"><h1>${GRADE}학년 ${classId}반</h1></div>
+        <div class="card success-wrap">
+          <div class="big">🎉</div>
+          <p style="font-size:18px;">제출 완료! <b>${escapeHtml(existing.name)}</b>님의 마음이 선생님 화면에 나타났어요.</p>
+          <div style="margin:14px 0;">${repHtml(existing, true)}</div>
+          <button class="btn btn-ghost btn-sm" id="editBtn">다시 고르기</button>
+        </div>`;
+      $("editBtn").addEventListener("click", () => { state.picked = { type: existing.type, value: existing.value, label: existing.label, bg: existing.bg }; state.activeTab = existing.type; state.forceEdit = true; drawForm(); });
+      return;
+    }
+    drawForm();
+  }
+
+  function drawForm(){
+    const types = availableTypes();
+    if(!state.activeTab || !types.includes(state.activeTab)) state.activeTab = types[0];
+
+    const tabsHtml = types.length > 1 ? `
+      <div class="tabbar">
+        ${types.map(t => `<div class="tab ${state.activeTab===t?'active':''}" data-t="${t}">
+          ${t==='emoji'?'😊 이모티콘':t==='color'?'🎨 색깔':'🗂️ 감정카드'}
+        </div>`).join("")}
+      </div>` : "";
+
+    app.innerHTML = `
+      <div class="top-nav"><h1>${GRADE}학년 ${classId}반</h1></div>
+      <div class="card">
+        <p style="font-size:16px;">이름을 적고, 지금 내 기분과 가장 가까운 것을 골라주세요.</p>
+        <input type="text" id="nameInput" placeholder="이름을 입력하세요" value="${escapeHtml(state.name)}" style="margin-bottom:16px;">
+        ${tabsHtml}
+        <div id="pickerWrap">${pickerHtml(state.activeTab)}</div>
+        <button class="btn btn-coral" style="width:100%;margin-top:18px;" id="submitBtn">이 마음으로 출석할게요! ✅</button>
+      </div>`;
+
+    $("nameInput").addEventListener("input", e => state.name = e.target.value);
+    document.querySelectorAll(".tab").forEach(elm => elm.addEventListener("click", () => {
+      state.activeTab = elm.dataset.t; state.picked = null; drawForm();
+    }));
+    bindPicker(state.activeTab);
+    $("submitBtn").addEventListener("click", submit);
+  }
+
+  backend.subscribeSession(classId, session => {
+    state.session = session || defaultSession();
+    ensureEntriesSub();
+    draw();
+  });
+}
+</script>
+</body>
+</html>
