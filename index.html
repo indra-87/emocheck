@@ -347,7 +347,10 @@ function initBackend(){
         subscribeSession(classId, cb){
           const cid = Number(classId);
           const load = () => sb.from("emo_class_sessions").select("*").eq("class_id", cid).maybeSingle()
-            .then(({data, error}) => { if(error) console.error(error); cb(rowToSession(data)); });
+            .then(({data, error}) => {
+              if(error){ reportBackendError("출석 상태 불러오기", error); return; }
+              cb(rowToSession(data));
+            });
           load();
           const channel = sb.channel("emo-session-"+cid)
             .on("postgres_changes", { event:"*", schema:"public", table:"emo_class_sessions", filter:`class_id=eq.${cid}` }, () => load())
@@ -362,13 +365,18 @@ function initBackend(){
             session_id: data.sessionId,
             drawn_ids: data.drawnIds,
             updated_at: new Date().toISOString()
-          }, { onConflict: "class_id" });
+          }, { onConflict: "class_id" }).then(({error}) => {
+            if(error){ reportBackendError("출석 상태 저장", error); throw error; }
+          });
         },
         subscribeEntries(classId, sessionId, cb){
           if(!sessionId){ cb({}); return ()=>{}; }
           const cid = Number(classId);
           const load = () => sb.from("emo_class_entries").select("*").eq("class_id", cid).eq("session_id", sessionId)
-            .then(({data, error}) => { if(error) console.error(error); cb(rowsToEntries(data)); });
+            .then(({data, error}) => {
+              if(error){ reportBackendError("출석 목록 불러오기", error); return; }
+              cb(rowsToEntries(data));
+            });
           load();
           const channel = sb.channel("emo-entries-"+sessionId)
             .on("postgres_changes", { event:"*", schema:"public", table:"emo_class_entries", filter:`session_id=eq.${sessionId}` }, () => load())
@@ -387,16 +395,20 @@ function initBackend(){
             bg: data.bg || null,
             ts: data.ts,
             updated_at: new Date().toISOString()
-          }, { onConflict: "class_id,session_id,entry_id" });
+          }, { onConflict: "class_id,session_id,entry_id" }).then(({error}) => {
+            if(error){ reportBackendError("출석 제출", error); throw error; }
+          });
         },
         deleteEntry(classId, sessionId, entryId){
           return sb.from("emo_class_entries").delete()
-            .eq("class_id", Number(classId)).eq("session_id", sessionId).eq("entry_id", entryId);
+            .eq("class_id", Number(classId)).eq("session_id", sessionId).eq("entry_id", entryId)
+            .then(({error}) => { if(error){ reportBackendError("응답 삭제", error); throw error; } });
         },
         clearEntries(classId, sessionId){
           if(!sessionId) return Promise.resolve();
           return sb.from("emo_class_entries").delete()
-            .eq("class_id", Number(classId)).eq("session_id", sessionId);
+            .eq("class_id", Number(classId)).eq("session_id", sessionId)
+            .then(({error}) => { if(error){ reportBackendError("전체 초기화", error); throw error; } });
         }
       };
       return;
