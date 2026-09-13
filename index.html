@@ -579,12 +579,18 @@ function renderTeacherPanel(classId){
     }
     const newSession = { types, status:"active", sessionId: uid(), drawnIds: [] };
     state.fullscreen = true;
+    state.session = newSession;
+    state.pendingTypes = { ...types };
+    ensureEntriesSub();
+    draw();
     backend.setSession(classId, newSession);
   }
 
   function endSession(){
     if(!confirm("오늘의 출석체크를 종료할까요? 학생 화면은 대기 상태로 바뀌어요.")) return;
-    backend.setSession(classId, { ...state.session, status:"idle" });
+    state.session = { ...state.session, status:"idle" };
+    draw();
+    backend.setSession(classId, state.session);
   }
 
   function startDraw(){
@@ -609,16 +615,19 @@ function renderTeacherPanel(classId){
         state.drawOverlay = "result";
         state.drawWinner = winner;
         const newDrawn = [...(state.session.drawnIds||[]), winner.id];
-        backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
+        state.session = { ...state.session, drawnIds: newDrawn };
         playTada();
         draw();
+        backend.setSession(classId, state.session);
       }
     }, 80);
   }
 
   function resetDraw(){
     if(!confirm("뽑기 기록을 초기화할까요? 모든 학생을 다시 뽑을 수 있게 돼요.")) return;
-    backend.setSession(classId, { ...state.session, drawnIds: [] });
+    state.session = { ...state.session, drawnIds: [] };
+    draw();
+    backend.setSession(classId, state.session);
   }
 
   async function exportAs(kind){
@@ -766,10 +775,12 @@ function renderTeacherPanel(classId){
     $("clearAllBtn")?.addEventListener("click", () => {
       if(total === 0){ alert("지울 출석 기록이 없어요."); return; }
       if(!confirm("정말 전체 초기화할까요? 지금 반의 모든 학생 응답이 사라져요. (학생들이 다시 표시해야 해요)")) return;
-      backend.clearEntries(classId, state.session.sessionId);
-      backend.setSession(classId, { ...state.session, drawnIds: [] });
+      state.entries = {};
+      state.session = { ...state.session, drawnIds: [] };
       state.selectedEntryId = null;
       draw();
+      backend.clearEntries(classId, state.session.sessionId);
+      backend.setSession(classId, state.session);
     });
     $("savePng")?.addEventListener("click", () => exportAs("png"));
     $("savePdf")?.addEventListener("click", () => exportAs("pdf"));
@@ -841,19 +852,24 @@ function renderTeacherPanel(classId){
     $("closeStudentBtn")?.addEventListener("click", () => { state.selectedEntryId = null; draw(); });
     $("excludeStudentBtn")?.addEventListener("click", () => {
       const newDrawn = [...(state.session.drawnIds || []), state.selectedEntryId];
-      backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
+      state.session = { ...state.session, drawnIds: newDrawn };
       state.selectedEntryId = null;
       draw();
+      backend.setSession(classId, state.session);
     });
     $("deleteStudentBtn")?.addEventListener("click", () => {
       if(!confirm(`${entry.name} 학생의 응답을 삭제할까요? 잘못 표시했을 때 사용하세요.`)) return;
-      backend.deleteEntry(classId, state.session.sessionId, state.selectedEntryId);
-      const newDrawn = (state.session.drawnIds || []).filter(id => id !== state.selectedEntryId);
-      if(newDrawn.length !== (state.session.drawnIds || []).length){
-        backend.setSession(classId, { ...state.session, drawnIds: newDrawn });
-      }
+      const deletedId = state.selectedEntryId;
+      const newEntries = { ...state.entries };
+      delete newEntries[deletedId];
+      state.entries = newEntries;
+      const newDrawn = (state.session.drawnIds || []).filter(id => id !== deletedId);
+      const drawnChanged = newDrawn.length !== (state.session.drawnIds || []).length;
+      if(drawnChanged) state.session = { ...state.session, drawnIds: newDrawn };
       state.selectedEntryId = null;
       draw();
+      backend.deleteEntry(classId, state.session.sessionId, deletedId);
+      if(drawnChanged) backend.setSession(classId, state.session);
     });
   }
 
